@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Diagnostics.Eventing.Reader;
 using System.Linq;
 using System.Runtime.Versioning;
@@ -15,51 +16,95 @@ public static class EventLogReader
     public static IReadOnlyList<EventRecordDto> Read(QueryOptions? options = null)
     {
         options ??= new QueryOptions();
-        var list = new List<EventRecordDto>();
-        var pathType = PathType.LogName;
-        var query = new EventLogQuery(options.LogName, pathType)
+
+        var machine = string.IsNullOrWhiteSpace(options.MachineName) ? "." : options.MachineName;
+        var logName = string.IsNullOrWhiteSpace(options.LogName) ? "Application" : options.LogName;
+
+        // 1) Fail fast if the log doesn't exist (avoids obscure NREs deep inside EventLogReader)
+        try
         {
-            Session = string.Equals(options.MachineName, ".", StringComparison.OrdinalIgnoreCase)
-                ? null
-                : new EventLogSession(options.MachineName)
+            if (!EventLog.Exists(logName, machine))
+                throw new EventLogApiException($"Log '{logName}' not found on '{machine}'.");
+        }
+        catch (Exception ex)
+        {
+            throw new EventLogApiException($"Failed to verify existence of log '{logName}' on '{machine}'.", ex);
+        }
+
+        using var session =
+            string.Equals(machine, ".", StringComparison.OrdinalIgnoreCase)
+                ? new EventLogSession()
+                : new EventLogSession(machine);
+
+        var query = new EventLogQuery(logName, PathType.LogName)
+        {
+            Session = session
         };
 
-        using var reader = new System.Diagnostics.Eventing.Reader.EventLogReader(query);
-
-        EventRecord? rec;
-        int count = 0;
-        while ((rec = reader.ReadEvent()) != null)
+        var list = new List<EventRecordDto>();
+        try
         {
-            using (rec)
+            using var reader = new System.Diagnostics.Eventing.Reader.EventLogReader(query);
+
+            int count = 0;
+            while (true)
             {
-                var dto = ToDto(rec);
-                if (ApplyFilters(dto, options))
+                EventRecord? rec;
+                try
                 {
-                    list.Add(dto);
-                    count++;
-                    if (options.MaxEvents is int max && count >= max)
-                        break;
+                    rec = reader.ReadEvent();
+                }
+                catch (EventLogNotFoundException ex)
+                {
+                    // Kanal wurde unterwegs unzugänglich → sauber beenden, statt NRE
+                    throw new EventLogApiException($"Log '{logName}' wurde während des Lesens unzugänglich.", ex);
+                }
+                catch (EventLogException ex)
+                {
+                    throw new EventLogApiException($"Fehler beim Lesen aus '{logName}'.", ex);
+                }
+
+                if (rec is null) break;
+
+                using (rec)
+                {
+                    var dto = ToDto(rec);
+                    if (ApplyFilters(dto, options))
+                    {
+                        list.Add(dto);
+                        count++;
+                        if (options.MaxEvents is int max && count >= max) break;
+                    }
                 }
             }
         }
+        catch (UnauthorizedAccessException ex)
+        {
+            throw new EventLogApiException($"Zugriff verweigert auf '{logName}' (Maschine: '{machine}'). Bitte als Administrator ausführen.", ex);
+        }
+        catch (NullReferenceException ex)
+        {
+            // Some environments can throw NRE inside EventLogReader if session/log are odd.
+            throw new EventLogApiException($"Internal reader error for '{logName}' on '{machine}'.", ex);
+        }
+        catch (Exception ex)
+        {
+            throw new EventLogApiException($"Unexpected error while reading '{logName}' on '{machine}'.", ex);
+        }
 
         // Order as requested
-        if (options.NewestFirst)
-            list = list.OrderByDescending(e => e.TimeCreated).ToList();
-        else
-            list = list.OrderBy(e => e.TimeCreated).ToList();
+        list = (options.NewestFirst
+            ? list.OrderByDescending(e => e.TimeCreated)
+            : list.OrderBy(e => e.TimeCreated)).ToList();
 
         return list;
     }
 
-    /// <summary>
-    /// Converts EventRecord to DTO, handling possible nulls.
-    /// </summary>
+    /// <summary>Converts EventRecord to DTO, handling possible nulls.</summary>
     private static EventRecordDto ToDto(EventRecord rec)
     {
         string? message = null;
-        try { message = rec.FormatDescription(); }
-        catch { /* some providers may throw on formatting; ignore */ }
+        try { message = rec.FormatDescription(); } catch { /* some providers may throw on formatting; ignore */ }
 
         return new EventRecordDto
         {

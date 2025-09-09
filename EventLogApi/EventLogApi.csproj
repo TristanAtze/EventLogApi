@@ -1,44 +1,43 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
+	<PropertyGroup>
+		<TargetFramework>net8.0-windows7.0</TargetFramework>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<Nullable>enable</Nullable>
+		<GenerateDocumentationFile>true</GenerateDocumentationFile>
+		<Deterministic>true</Deterministic>
+		<PlatformTarget>x64</PlatformTarget>
 
-  <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <Nullable>enable</Nullable>
-    <GenerateDocumentationFile>true</GenerateDocumentationFile>
-    <Deterministic>true</Deterministic>
-    <PlatformTarget>x64</PlatformTarget>
+		<!-- NuGet packaging -->
+		<GeneratePackageOnBuild>true</GeneratePackageOnBuild>
+		<IncludeSymbols>true</IncludeSymbols>
+		<SymbolPackageFormat>snupkg</SymbolPackageFormat>
 
-    <!-- NuGet packaging -->
-    <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
-    <IncludeSymbols>true</IncludeSymbols>
-    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+		<!-- NuGet metadata -->
+		<PackageId>EventLogApi</PackageId>
+		<Authors>Ben Sowieja</Authors>
+		<Description>Windows Event Log API for .NET</Description>
+		<PackageTags>windows;eventlog;logging;monitoring;diagnostics</PackageTags>
+		<PackageProjectUrl>https://github.com/TristanAtze/EventLogApi</PackageProjectUrl>
+		<RepositoryUrl>https://github.com/TristanAtze/EventLogApi.git</RepositoryUrl>
+		<RepositoryType>git</RepositoryType>
+		<PackageLicenseExpression>MIT</PackageLicenseExpression>
 
-    <!-- NuGet metadata -->
-    <PackageId>EventLogApi</PackageId>
-    <Authors>Ben Sowieja</Authors>
-    <Description>Simple, robust Windows Event Log API for .NET: write, read, watch, with auto source creation and filters.</Description>
-    <PackageTags>windows;eventlog;logging;monitoring;diagnostics</PackageTags>
-    <PackageProjectUrl>https://github.com/TristanAtze/EventLogApi</PackageProjectUrl>
-    <RepositoryUrl>https://github.com/TristanAtze/EventLogApi.git</RepositoryUrl>
-    <RepositoryType>git</RepositoryType>
-    <PackageLicenseExpression>MIT</PackageLicenseExpression>
-    <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
+		<!-- SourceLink -->
+		<PublishRepositoryUrl>true</PublishRepositoryUrl>
+		<EmbedUntrackedSources>true</EmbedUntrackedSources>
+		<ContinuousIntegrationBuild>true</ContinuousIntegrationBuild>
 
-    <!-- SourceLink -->
-    <PublishRepositoryUrl>true</PublishRepositoryUrl>
-    <EmbedUntrackedSources>true</EmbedUntrackedSources>
-    <ContinuousIntegrationBuild>true</ContinuousIntegrationBuild>
+		<AssemblyName>EventLogApi</AssemblyName>
+		<RootNamespace>EventLogApi</RootNamespace>
+	</PropertyGroup>
 
-    <RootNamespace>EventLogApi</RootNamespace>
-    <AssemblyName>EventLogApi</AssemblyName>
-  </PropertyGroup>
+	<ItemGroup>
+		<!-- EventLog + Eventing.Reader -->
+		<PackageReference Include="System.Diagnostics.EventLog" Version="8.0.0" />
+		<PackageReference Include="Microsoft.SourceLink.GitHub" Version="8.0.0" PrivateAssets="All" />
+	</ItemGroup>
 
-  <ItemGroup>
-    <PackageReference Include="Microsoft.SourceLink.GitHub" Version="8.0.0" PrivateAssets="All" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <Compile Include="EventLog\**\*.cs" />
-  </ItemGroup>
-
+	<ItemGroup>
+		<Compile Include="EventLog\**\*.cs" />
+	</ItemGroup>
 </Project>
