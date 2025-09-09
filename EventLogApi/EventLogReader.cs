@@ -38,8 +38,11 @@ public static class EventLogReader
 
         var query = new EventLogQuery(logName, PathType.LogName)
         {
-            Session = session
+            Session = session,
+            ReverseDirection = true
         };
+
+
 
         var list = new List<EventRecordDto>();
         try
@@ -49,22 +52,28 @@ public static class EventLogReader
             int count = 0;
             while (true)
             {
-                EventRecord? rec;
+                EventRecord? rec = null;
                 try
                 {
                     rec = reader.ReadEvent();
                 }
                 catch (EventLogNotFoundException ex)
                 {
-                    // Kanal wurde unterwegs unzugänglich → sauber beenden, statt NRE
-                    throw new EventLogApiException($"Log '{logName}' wurde während des Lesens unzugänglich.", ex);
+                    throw new EventLogApiException(
+                        $"Log '{logName}' wurde während des Lesens unzugänglich (Maschine '{machine}').", ex);
                 }
                 catch (EventLogException ex)
                 {
-                    throw new EventLogApiException($"Fehler beim Lesen aus '{logName}'.", ex);
+                    throw new EventLogApiException(
+                        $"Fehler beim Lesen aus '{logName}' (Maschine '{machine}').", ex);
+                }
+                catch (UnauthorizedAccessException ex)
+                {
+                    throw new EventLogApiException(
+                        $"Zugriff verweigert auf '{logName}' (Maschine '{machine}'). Bitte als Administrator ausführen.", ex);
                 }
 
-                if (rec is null) break;
+                if (rec is null) break; 
 
                 using (rec)
                 {

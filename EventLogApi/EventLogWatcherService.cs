@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Diagnostics.Eventing.Reader;
 using System.Runtime.Versioning;
 
@@ -6,12 +7,16 @@ namespace EventLogApi;
 
 /// <summary>
 /// Watches a Windows Event Log and raises events when new entries arrive.
-/// Uses EventLogWatcher (Eventing.Reader).
 /// </summary>
 [SupportedOSPlatform("windows")]
 public sealed class EventLogWatcherService : IDisposable
 {
-    private readonly EventLogWatcher _watcher;
+    private readonly string _logName;
+    private readonly string _machineName;
+    private readonly string? _xPathQuery;
+
+    private EventLogSession? _session;
+    private EventLogWatcher? _watcher;
 
     /// <summary>Raised for each matching event.</summary>
     public event Action<EventRecordDto>? OnEvent;
@@ -27,16 +32,65 @@ public sealed class EventLogWatcherService : IDisposable
     /// </param>
     public EventLogWatcherService(string logName, string machineName = ".", string? xPathQuery = null)
     {
-        var session = string.Equals(machineName, ".", StringComparison.OrdinalIgnoreCase)
-            ? null
-            : new EventLogSession(machineName);
+        if (string.IsNullOrWhiteSpace(logName))
+            throw new ArgumentException("logName must not be null or empty.", nameof(logName));
 
-        EventLogQuery query = xPathQuery is null
-            ? new EventLogQuery(logName, PathType.LogName) { Session = session }
-            : new EventLogQuery(logName, PathType.LogName, xPathQuery) { Session = session };
+        _logName = logName;
+        _machineName = string.IsNullOrWhiteSpace(machineName) ? "." : machineName;
+        _xPathQuery = string.IsNullOrWhiteSpace(xPathQuery) ? null : xPathQuery;
+    }
 
-        _watcher = new EventLogWatcher(query, null, false);
-        _watcher.EventRecordWritten += WatcherOnEventRecordWritten;
+    /// <summary>
+    /// Initialize session + watcher if not yet created.
+    /// Throws EventLogApiException with clear message if something is wrong.
+    /// </summary>
+    private void EnsureInitialized()
+    {
+        if (_watcher is not null) return;
+
+        try
+        {
+            _session = string.Equals(_machineName, ".", StringComparison.OrdinalIgnoreCase)
+                ? new EventLogSession()
+                : new EventLogSession(_machineName);
+
+            // Validate the log really exists on the target machine
+            if (!LogExists(_session, _logName))
+                throw new EventLogApiException($"Log '{_logName}' does not exist on '{_machineName}'.");
+
+            EventLogQuery query = _xPathQuery is null
+                ? new EventLogQuery(_logName, PathType.LogName)
+                : new EventLogQuery(_logName, PathType.LogName, _xPathQuery);
+
+            query.Session = _session;
+
+            _watcher = new EventLogWatcher(query, null, false);
+            _watcher.EventRecordWritten += WatcherOnEventRecordWritten;
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            throw new EventLogApiException(
+                $"Access denied initializing watcher for '{_logName}' on '{_machineName}'. Try running elevated.", ex);
+        }
+        catch (EventLogNotFoundException ex)
+        {
+            throw new EventLogApiException(
+                $"Event log '{_logName}' not found or inaccessible on '{_machineName}'.", ex);
+        }
+        catch (Exception ex)
+        {
+            throw new EventLogApiException(
+                $"Failed to initialize EventLogWatcher for '{_logName}' on '{_machineName}'.", ex);
+        }
+    }
+
+    private static bool LogExists(EventLogSession session, string logName)
+    {
+        // Enumerate available logs; safer than EventLog.Exists for Eventing.Reader channels
+        foreach (var name in session.GetLogNames())
+            if (string.Equals(name, logName, StringComparison.OrdinalIgnoreCase))
+                return true;
+        return false;
     }
 
     private void WatcherOnEventRecordWritten(object? sender, EventRecordWrittenEventArgs e)
@@ -45,21 +99,11 @@ public sealed class EventLogWatcherService : IDisposable
         {
             if (e.EventRecord is null) return;
             using var rec = e.EventRecord;
-            var dto = EventLogReader.Read(new QueryOptions { LogName = rec.LogName ?? "Application", MaxEvents = 0 }); // not used
-            // Convert directly to DTO (avoid re-read)
-            var mapped = Map(rec);
-            OnEvent?.Invoke(mapped);
-        }
-        catch (Exception ex)
-        {
-            OnError?.Invoke(ex);
-        }
 
-        static EventRecordDto Map(EventRecord rec)
-        {
             string? msg = null;
-            try { msg = rec.FormatDescription(); } catch { }
-            return new EventRecordDto
+            try { msg = rec.FormatDescription(); } catch { /* ignore formatting issues */ }
+
+            var dto = new EventRecordDto
             {
                 Id = rec.Id,
                 Level = rec.Level,
@@ -76,20 +120,58 @@ public sealed class EventLogWatcherService : IDisposable
                 RawXml = Safe(rec.ToXml)
             };
 
+            OnEvent?.Invoke(dto);
+
             static T? Safe<T>(Func<T> f) { try { return f(); } catch { return default; } }
+        }
+        catch (Exception ex)
+        {
+            OnError?.Invoke(ex);
         }
     }
 
-    public void Start() => _watcher.Enabled = true;
-    public void Stop() => _watcher.Enabled = false;
+    public void Start()
+    {
+        EnsureInitialized();
+        try
+        {
+            _watcher!.Enabled = true;
+        }
+        catch (Exception ex)
+        {
+            throw new EventLogApiException($"Failed to start watcher for '{_logName}' on '{_machineName}'.", ex);
+        }
+    }
+
+    public void Stop()
+    {
+        try
+        {
+            if (_watcher is not null)
+                _watcher.Enabled = false;
+        }
+        catch (Exception ex)
+        {
+            OnError?.Invoke(ex);
+        }
+    }
 
     public void Dispose()
     {
         try
         {
-            _watcher.EventRecordWritten -= WatcherOnEventRecordWritten;
-            _watcher.Dispose();
+            if (_watcher is not null)
+            {
+                _watcher.EventRecordWritten -= WatcherOnEventRecordWritten;
+                _watcher.Dispose();
+                _watcher = null;
+            }
         }
         catch { /* ignore */ }
+        finally
+        {
+            _session?.Dispose();
+            _session = null;
+        }
     }
 }
